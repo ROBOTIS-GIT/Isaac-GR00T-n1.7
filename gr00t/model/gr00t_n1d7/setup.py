@@ -125,6 +125,33 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
             )
 
+        # Base checkpoints load strictly before adding the new encoder. Resuming
+        # tactile checkpoints restores every weight and requires the same contract.
+        requested = self.model_config
+        if model.config.use_tactile:
+            fields = (
+                "use_tactile",
+                "tactile_encoder",
+                "tactile_embed_dim",
+                "tactile_state_keys",
+                "tactile_input_shape",
+            )
+            for key in fields:
+                saved, wanted = getattr(model.config, key), getattr(requested, key)
+                if isinstance(saved, (tuple, list)):
+                    saved, wanted = list(saved), list(wanted)
+                if saved != wanted:
+                    raise ValueError(
+                        f"Checkpoint {key} differs from requested tactile configuration"
+                    )
+        elif requested.use_tactile:
+            if not requested.tune_projector:
+                raise ValueError("A new tactile encoder requires tune_projector=True")
+            model.action_head.enable_tactile(requested)
+            if hasattr(model.backbone, "restore_tactile_rotary_buffers"):
+                model.backbone.restore_tactile_rotary_buffers()
+            logging.info("Initialized tactile encoder; all pretrained adapters were preserved")
+
         logging.debug(f"Model Config: {model.config}")
         if get_rank() == 0:
             with open(self.save_cfg_dir / "final_model_config.json", "w") as f:
@@ -150,10 +177,30 @@ class Gr00tN1d7Pipeline(ModelPipeline):
 
     def _create_dataset(self, save_cfg_dir: Path):
         """Create appropriate dataset based on task and mode."""
+        # Only override a saved image recipe when explicitly configured.
+        image_kwargs = {}
+        if self.model_config.letter_box_transform is not None:
+            image_kwargs["letter_box_transform"] = self.model_config.letter_box_transform
+        tactile_kwargs = {
+            key: getattr(self.model_config, key)
+            for key in (
+                "use_tactile",
+                "tactile_state_keys",
+                "tactile_input_shape",
+                "tactile_embed_dim",
+            )
+        }
+        if self.model_config.use_tactile and getattr(self, "model", None) is not None:
+            tactile_kwargs.update(
+                max_state_dim=self.model.config.max_state_dim,
+                max_action_dim=self.model.config.max_action_dim,
+            )
         if self.config.training.start_from_checkpoint is not None:
             processor = AutoProcessor.from_pretrained(
                 self.config.training.start_from_checkpoint,
                 # Overrides
+                **image_kwargs,
+                **tactile_kwargs,
                 modality_configs=self.config.data.modality_configs,
                 use_percentiles=self.model_config.use_percentiles,
                 image_crop_size=self.model_config.image_crop_size,
@@ -180,6 +227,12 @@ class Gr00tN1d7Pipeline(ModelPipeline):
             )
         else:
             processor = self.processor_class(
+                **image_kwargs,
+                **{
+                    k: v
+                    for k, v in tactile_kwargs.items()
+                    if k.startswith("tactile_") or k == "use_tactile"
+                },
                 modality_configs=self.config.data.modality_configs,
                 use_percentiles=self.model_config.use_percentiles,
                 statistics=self._get_statistics(),  # By default is None, so this will be computed and set later.

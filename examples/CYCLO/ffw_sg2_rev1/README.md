@@ -20,6 +20,12 @@ The included modality uses three camera streams:
 - `observation.images.rgb.cam_left_wrist`
 - `observation.images.rgb.cam_right_wrist`
 
+The modality config names the cameras but does not set a separate size for the
+head or wrist streams. The default GR00T processor applies the same transform
+to all three: pad to a square with black bars, resize to 256×256, crop to 230×230
+(random during training, centered during inference), then resize to 256×256.
+Inference uses the image settings saved with its checkpoint's processor.
+
 ## Prepare Dataset
 
 Copy the dataset modality file into the LeRobot dataset metadata directory:

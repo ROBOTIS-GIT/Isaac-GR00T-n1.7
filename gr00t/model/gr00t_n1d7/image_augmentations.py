@@ -379,6 +379,7 @@ def build_image_transformations_albumentations(
     shortest_image_edge,
     crop_fraction,
     extra_augmentation_config: dict | None = None,
+    letter_box_transform: bool = True,
 ):
     """
     Build albumentations-based image transformations equivalent to the torchvision version.
@@ -413,16 +414,28 @@ def build_image_transformations_albumentations(
     else:
         max_size = shortest_image_edge
 
+    def make_resize():
+        if shortest_image_edge is None and not letter_box_transform:
+            return A.Resize(
+                height=image_target_size[0],
+                width=image_target_size[1],
+                interpolation=cv2.INTER_AREA,
+            )
+        return A.SmallestMaxSize(max_size=max_size, interpolation=cv2.INTER_AREA)
+
     extra_augmentation_config = extra_augmentation_config or {}
 
-    # Training transforms (using ReplayCompose for consistent augmentation across views)
-    # Use SmallestMaxSize to preserve aspect ratios, with INTER_AREA for antialiasing
-    train_transform_list = [
-        LetterBoxPad(),
-        A.SmallestMaxSize(max_size=max_size, interpolation=cv2.INTER_AREA),
-        FractionalRandomCrop(crop_fraction=fraction_to_use),
-        A.SmallestMaxSize(max_size=max_size, interpolation=cv2.INTER_AREA),
-    ]
+    # Training transforms (using ReplayCompose for consistent augmentation across views).
+    train_transform_list = []
+    if letter_box_transform:
+        train_transform_list.append(LetterBoxPad())
+    train_transform_list.extend(
+        [
+            make_resize(),
+            FractionalRandomCrop(crop_fraction=fraction_to_use),
+            make_resize(),
+        ]
+    )
 
     if random_rotation_angle is not None and random_rotation_angle != 0:
         train_transform_list.append(A.Rotate(limit=random_rotation_angle, p=1.0))
@@ -477,14 +490,15 @@ def build_image_transformations_albumentations(
 
     # Evaluation transforms (deterministic, no extra augmentations)
     # Use SmallestMaxSize to preserve aspect ratios, with INTER_AREA for antialiasing
-    eval_transform = A.Compose(
+    eval_transform_list = [LetterBoxPad()] if letter_box_transform else []
+    eval_transform_list.extend(
         [
-            LetterBoxPad(),
-            A.SmallestMaxSize(max_size=max_size, interpolation=cv2.INTER_AREA),
+            make_resize(),
             FractionalCenterCrop(crop_fraction=fraction_to_use),
-            A.SmallestMaxSize(max_size=max_size, interpolation=cv2.INTER_AREA),
+            make_resize(),
         ]
     )
+    eval_transform = A.Compose(eval_transform_list)
 
     return train_transform, eval_transform
 
@@ -549,7 +563,11 @@ class LetterBoxTransform:
 
 
 def build_image_transformations(
-    image_target_size, image_crop_size, random_rotation_angle, color_jitter_params
+    image_target_size,
+    image_crop_size,
+    random_rotation_angle,
+    color_jitter_params,
+    letter_box_transform: bool = True,
 ):
     """
     Build torchvision-based image transformations.
@@ -565,7 +583,7 @@ def build_image_transformations(
     """
     transform_list = [
         transforms.ToImage(),
-        LetterBoxTransform(),
+        *([LetterBoxTransform()] if letter_box_transform else []),
         # transforms.ToDtype(torch.get_default_dtype(), scale=True),
         transforms.Resize(size=image_target_size),
         transforms.RandomCrop(size=image_crop_size),
@@ -582,7 +600,7 @@ def build_image_transformations(
         [
             transforms.ToImage(),
             # transforms.ToDtype(torch.get_default_dtype(), scale=True),
-            LetterBoxTransform(),
+            *([LetterBoxTransform()] if letter_box_transform else []),
             transforms.Resize(size=image_target_size),
             transforms.CenterCrop(size=image_crop_size),
             transforms.Resize(size=image_target_size),

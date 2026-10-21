@@ -16,6 +16,7 @@
 # Launch finetuning for N1.7 on "single node".
 # This script tries to provide a similar user experience as current OSS.
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -27,18 +28,65 @@ from gr00t.configs.finetune_config import FinetuneConfig
 from gr00t.experiment.experiment import run
 
 
-# Make sure the user provided modality config is registered.
-def load_modality_config(modality_config_path: str):
+def load_modality_config(modality_config_path: str, *, embodiment_tag=None, use_tactile=False):
+    """Load a Python registration or exported modality/tactile settings.
+
+    Exported MODALITY_CONFIG definitions are copied per run. Legacy Python
+    files can still populate the registry through register_modality_config().
+    Dataset meta/modality.json is a separate array-slice mapping, not a config
+    for this loader.
+    """
     import importlib
     import sys
 
+    from gr00t.data.types import ModalityConfig
+
     path = Path(modality_config_path)
-    if path.exists() and path.suffix == ".py":
-        sys.path.append(str(path.parent))
-        importlib.import_module(path.stem)
-        print(f"Loaded modality config: {path}")
-    else:
-        raise FileNotFoundError(f"Modality config path does not exist: {modality_config_path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"Modality config path does not exist: {path}")
+    if path.suffix != ".py":
+        raise ValueError("Modality config must be a .py file")
+    sys.path.append(str(path.parent))
+    module = importlib.import_module(path.stem)
+    print(f"Loaded modality config: {path}")
+    if not hasattr(module, "MODALITY_CONFIG"):
+        if use_tactile:
+            raise ValueError(
+                "--use_tactile requires Python MODALITY_CONFIG and TACTILE_CONFIG exports"
+            )
+        return None  # Legacy import-time registration, e.g. company SG2.
+    if (
+        embodiment_tag is not None
+        and getattr(module, "EMBODIMENT_TAG", embodiment_tag) != embodiment_tag
+    ):
+        raise ValueError("Config embodiment_tag does not match --embodiment-tag")
+    modalities = deepcopy(module.MODALITY_CONFIG)
+    if not isinstance(modalities, dict) or set(modalities) != {
+        "video",
+        "state",
+        "action",
+        "language",
+    }:
+        raise ValueError("MODALITY_CONFIG must define video, state, action, and language")
+    if not all(isinstance(value, ModalityConfig) for value in modalities.values()):
+        raise ValueError("MODALITY_CONFIG values must be ModalityConfig instances")
+    tactile_options = {}
+    if use_tactile:
+        tactile = getattr(module, "TACTILE_CONFIG", None)
+        if not tactile or not tactile.get("state_keys"):
+            raise ValueError("--use_tactile requires tactile state_keys in the selected config")
+        keys = list(tactile["state_keys"])
+        if len(set(keys)) != len(keys) or set(keys).intersection(modalities["state"].modality_keys):
+            raise ValueError("Tactile state keys must be unique and separate from joint keys")
+        modalities["state"].modality_keys.extend(keys)
+        tactile_options = {
+            "use_tactile": True,
+            "tactile_state_keys": keys,
+            "tactile_encoder": tactile.get("encoder", "finger_mlp"),
+            "tactile_embed_dim": tactile.get("embed_dim", 32),
+            "tactile_input_shape": tuple(tactile.get("input_shape", [2, 5, 9])),
+        }
+    return modalities, tactile_options
 
 
 if __name__ == "__main__":
@@ -52,9 +100,27 @@ if __name__ == "__main__":
     ft_config.embodiment_tag = EmbodimentTag.resolve(ft_config.embodiment_tag)
     embodiment_tag = ft_config.embodiment_tag.value
 
-    # all rank workers should register for the modality config
+    # Load modality definitions before constructing the default experiment config.
+    # Legacy .py files register modalities on import (the original company path).
+    # Python MODALITY_CONFIG/TACTILE_CONFIG exports replace only the selected
+    # embodiment in a copy of this run's defaults.
+    # With no file, use the registered embodiment defaults. Dataset meta/modality.json
+    # is a separate array-slice mapping and cannot be passed as this config.
+    selected_modalities, tactile_options = None, {}
     if ft_config.modality_config_path is not None:
-        load_modality_config(ft_config.modality_config_path)
+        loaded_config = load_modality_config(
+            ft_config.modality_config_path,
+            embodiment_tag=embodiment_tag,
+            use_tactile=ft_config.use_tactile,
+        )
+        if loaded_config is not None:
+            selected_modalities, tactile_options = loaded_config
+    elif ft_config.use_tactile:
+        raise ValueError("--use_tactile requires --modality-config-path")
+    if not ft_config.use_tactile and (
+        ft_config.tactile_encoder is not None or ft_config.tactile_embed_dim is not None
+    ):
+        raise ValueError("Tactile encoder options require --use_tactile")
 
     dataset_paths = [path for path in ft_config.dataset_path.split(os.pathsep) if path]
 
@@ -73,6 +139,18 @@ if __name__ == "__main__":
         }
     )
     config.load_config_path = None
+    if selected_modalities is not None:
+        config.data.modality_configs = deepcopy(config.data.modality_configs)
+        config.data.modality_configs[embodiment_tag] = selected_modalities
+    for key, value in tactile_options.items():
+        setattr(config.model, key, value)
+    if ft_config.tactile_encoder is not None:
+        config.model.tactile_encoder = ft_config.tactile_encoder
+    if ft_config.tactile_embed_dim is not None:
+        config.model.tactile_embed_dim = ft_config.tactile_embed_dim
+
+    if ft_config.letter_box_transform is not None:
+        config.model.letter_box_transform = ft_config.letter_box_transform
 
     # overwrite with finetune config supplied by the user
     config.model.tune_llm = ft_config.tune_llm

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Finetune config used for single node post-training.
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -40,9 +40,21 @@ class FinetuneConfig:
 
     modality_config_path: str | None = None
     """
-    Path to a Python file defining the modality configuration for the given embodiment. 
+    Path to a Python registration/exports file for the given embodiment.
     If None, use the pre-registered modality config in `gr00t/configs/data/embodiment_configs.py`. 
     """
+
+    letter_box_transform: bool | None = field(default=None, kw_only=True)
+    """Override letterboxing; None retains the saved processor setting."""
+
+    use_tactile: bool = field(default=False, kw_only=True)
+    """Enable the selected config's tactile settings and its trainable encoder."""
+
+    tactile_encoder: str | None = field(default=None, kw_only=True)
+    """Override the configured encoder: finger_mlp, finger_transformer, or module:factory."""
+
+    tactile_embed_dim: int | None = field(default=None, kw_only=True)
+    """Override the configured tactile latent width."""
 
     # --- Model Tuning Flags ---
     tune_llm: bool = False

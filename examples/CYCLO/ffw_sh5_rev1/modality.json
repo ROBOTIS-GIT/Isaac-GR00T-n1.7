@@ -1,0 +1,72 @@
+{
+  "state": {
+    "left_arm": {
+      "original_key": "observation.state",
+      "start": 0,
+      "end": 7
+    },
+    "right_arm": {
+      "original_key": "observation.state",
+      "start": 27,
+      "end": 34
+    },
+    "left_hand": {
+      "original_key": "observation.state",
+      "start": 7,
+      "end": 27
+    },
+    "right_hand": {
+      "original_key": "observation.state",
+      "start": 34,
+      "end": 54
+    },
+    "tactile_left": {
+      "original_key": "observation.tactile.left",
+      "start": 0,
+      "end": 45
+    },
+    "tactile_right": {
+      "original_key": "observation.tactile.right",
+      "start": 0,
+      "end": 45
+    }
+  },
+  "action": {
+    "left_arm": {
+      "original_key": "action",
+      "start": 0,
+      "end": 7
+    },
+    "right_arm": {
+      "original_key": "action",
+      "start": 7,
+      "end": 14
+    },
+    "left_hand": {
+      "original_key": "action",
+      "start": 14,
+      "end": 34
+    },
+    "right_hand": {
+      "original_key": "action",
+      "start": 34,
+      "end": 54
+    }
+  },
+  "video": {
+    "cam_left_head": {
+      "original_key": "observation.images.rgb.cam_left_head"
+    },
+    "cam_left_wrist": {
+      "original_key": "observation.images.rgb.cam_left_wrist"
+    },
+    "cam_right_wrist": {
+      "original_key": "observation.images.rgb.cam_right_wrist"
+    }
+  },
+  "annotation": {
+    "human.task_description": {
+      "original_key": "task_index"
+    }
+  }
+}

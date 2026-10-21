@@ -96,6 +96,65 @@ class Qwen3Backbone(torch.nn.Module):
                     p.data = p.data.to(torch.float32)
                     logger.debug(f"Casting trainable parameter {n} to fp32")
 
+        self._apply_vision_patch_embed_channels_last()
+
+    def _apply_vision_patch_embed_channels_last(self) -> None:
+        """Use the fast Conv3D layout, as in the reference GR00T training path.
+
+        Contiguous bf16 Qwen patch embedding can select a very slow cuDNN
+        kernel with PyTorch 2.9. This changes memory layout only; checkpoint
+        keys, shapes, and the convolution operation remain unchanged.
+        """
+        visual = getattr(self.model, "visual", None)
+        if visual is None:
+            return
+
+        def to_channels_last(_module, inputs):
+            # Legacy ONNX tracing cannot lower contiguous(memory_format=...).
+            if not inputs or torch.jit.is_tracing():
+                return inputs
+            value = inputs[0]
+            if isinstance(value, torch.Tensor) and value.dim() == 5:
+                return (value.contiguous(memory_format=torch.channels_last_3d), *inputs[1:])
+            return inputs
+
+        for module in visual.modules():
+            if isinstance(module, torch.nn.Conv3d):
+                module.to(memory_format=torch.channels_last_3d)
+                module.register_forward_pre_hook(to_channels_last)
+
+    def restore_tactile_rotary_buffers(self):
+        """Restore the analytic RoPE buffers used by the newer SH5 training runtime.
+
+        These buffers are absent from safetensors. Nested checkpoint loading can
+        leave them uninitialized; rebuild with Transformers' own constructors.
+        Called only for the opt-in tactile path to preserve legacy loading.
+        """
+        device = next(
+            (p.device for p in self.model.parameters() if p.device.type != "meta"),
+            torch.device("cpu"),
+        )
+        visual = self.model.visual
+        vision_rotary = visual.rotary_pos_emb
+        vision_config = self.model.config.vision_config
+        head_dim = vision_config.hidden_size // vision_config.num_heads
+        text_rotary = self.model.language_model.rotary_emb
+        with torch.device(device):
+            vision = type(vision_rotary)(head_dim // 2)
+            text = type(text_rotary)(config=text_rotary.config, device=device)
+        vision_rotary.register_buffer(
+            "inv_freq",
+            vision.inv_freq.detach().to(device=device, dtype=torch.float32),
+            persistent=False,
+        )
+        text_rotary.register_buffer(
+            "inv_freq",
+            text.inv_freq.detach().to(device=device, dtype=torch.float32),
+            persistent=False,
+        )
+        if hasattr(text_rotary, "original_inv_freq"):
+            text_rotary.original_inv_freq = text_rotary.inv_freq.clone()
+
     def set_trainable_parameters(self, tune_llm: bool, tune_visual: bool, tune_top_llm_layers: int):
         self.tune_llm = tune_llm
         self.tune_visual = tune_visual

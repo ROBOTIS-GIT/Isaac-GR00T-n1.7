@@ -60,6 +60,8 @@ class Gr00tN1d7Config(PretrainedConfig):
     random_rotation_angle: int | None = None
     color_jitter_params: dict[str, float] | None = None
     use_albumentations_transforms: bool = True
+    # None preserves the checkpoint processor setting; a fresh processor defaults to False.
+    letter_box_transform: bool | None = None
     # Extra augmentation config (mask-based and others).
     extra_augmentation_config: dict | None = None
     formalize_language: bool = True
@@ -72,6 +74,13 @@ class Gr00tN1d7Config(PretrainedConfig):
     # Action head configuration parameters
     max_state_dim: int = 132  # Default from state_shape
     max_action_dim: int = 132  # Default from action_shape
+    # The optional tactile latent occupies the final state slots, preserving
+    # all pretrained state/action adapter dimensions.
+    use_tactile: bool = field(default=False, kw_only=True)
+    tactile_encoder: str = field(default="finger_mlp", kw_only=True)
+    tactile_embed_dim: int = field(default=32, kw_only=True)
+    tactile_state_keys: list[str] = field(default_factory=list, kw_only=True)
+    tactile_input_shape: tuple[int, int, int] = field(default=(2, 5, 9), kw_only=True)
     action_horizon: int = 40
     hidden_size: int = 1024
     input_embedding_dim: int = 1536
@@ -148,6 +157,7 @@ class Gr00tN1d7Config(PretrainedConfig):
                 "random_rotation_angle",
                 "color_jitter_params",
                 "use_albumentations_transforms",
+                "letter_box_transform",
                 "formalize_language",
                 "image_crop_size",
                 "image_target_size",
